@@ -146,7 +146,7 @@ class GaussianModel:
         # )
         self.recolor = TriplaneEncoding(in_dim=3,
                                         resolution=64,
-                                        num_components=64)
+                                        num_components=64).cuda()
         self.direction_encoding = tcnn.Encoding(
             n_input_dims=3,
             encoding_config={
@@ -155,7 +155,7 @@ class GaussianModel:
             },
         )
         self.mlp_head = tcnn.Network(
-                n_input_dims=(self.direction_encoding.n_output_dims+self.recolor.n_output_dims),
+                n_input_dims=(self.direction_encoding.n_output_dims+self.recolor.num_components),
                 n_output_dims=3,
                 network_config={
                     "otype": "FullyFusedMLP",
