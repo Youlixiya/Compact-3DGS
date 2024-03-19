@@ -133,17 +133,17 @@ class GaussianModel:
             self.vq_rot = ResidualVQ(dim = 4, codebook_size = model.rvq_size, num_quantizers = model.rvq_num, decay = 0.8, commitment_weight = 0., kmeans_init = True, kmeans_iters = 1).cuda()
             self.rvq_bit = math.log2(model.rvq_size)
             self.rvq_num = model.rvq_num
-        # self.recolor = tcnn.Encoding(
-        #          n_input_dims=3,
-        #          encoding_config={
-        #             "otype": "HashGrid",
-        #             "n_levels": 16,
-        #             "n_features_per_level": 2,
-        #             "log2_hashmap_size": model.max_hashmap,
-        #             "base_resolution": 16,
-        #             "per_level_scale": 1.447,
-        #         },
-        # )
+        self.recolor = tcnn.Encoding(
+                 n_input_dims=3,
+                 encoding_config={
+                    "otype": "HashGrid",
+                    "n_levels": 16,
+                    "n_features_per_level": 2,
+                    "log2_hashmap_size": model.max_hashmap,
+                    "base_resolution": 16,
+                    "per_level_scale": 1.447,
+                },
+        )
         self.recolor = TriplaneEncoding(in_dim=3,
                                         resolution=64,
                                         num_components=64).cuda()
