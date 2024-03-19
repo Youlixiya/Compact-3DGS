@@ -11,8 +11,10 @@
 
 import torch
 import numpy as np
+from typing import Literal, Optional, Sequence
 from utils.general_utils import inverse_sigmoid, get_expon_lr_func, build_rotation
-from torch import nn
+from torch import nn, Tensor
+import torch.nn.functional as F
 import os
 from utils.system_utils import mkdir_p
 from plyfile import PlyData, PlyElement
@@ -20,12 +22,75 @@ from utils.sh_utils import RGB2SH
 from simple_knn._C import distCUDA2
 from utils.graphics_utils import BasicPointCloud
 from utils.general_utils import strip_symmetric, build_scaling_rotation
-
+from jaxtyping import Float, Int, Shaped
 from vector_quantize_pytorch import VectorQuantize, ResidualVQ
 import tinycudann as tcnn
 
 from dahuffman import HuffmanCodec
 import math
+
+
+class TriplaneEncoding(nn.Module):
+
+    plane_coef: Float[Tensor, "3 num_components resolution resolution"]
+
+    def __init__(
+        self,
+        in_dim: int = 3,
+        resolution: int = 32,
+        num_components: int = 64,
+        init_scale: float = 0.1,
+        reduce: Literal["sum", "product"] = "sum",
+    ) -> None:
+        super().__init__()
+        
+        self.in_dim = in_dim
+        self.resolution = resolution
+        self.num_components = num_components
+        self.init_scale = init_scale
+        self.reduce = reduce
+
+        self.plane_coef = nn.Parameter(
+            self.init_scale * torch.randn((3, self.num_components, self.resolution, self.resolution))
+        )
+
+    def get_out_dim(self) -> int:
+        return self.num_components
+
+    def forward(self, in_tensor: Float[Tensor, "*bs 3"]) -> Float[Tensor, "*bs num_components featuresize"]:
+        """Sample features from this encoder. Expects in_tensor to be in range [0, resolution]"""
+
+        original_shape = in_tensor.shape
+        in_tensor = in_tensor.reshape(-1, 3)
+
+        plane_coord = torch.stack([in_tensor[..., [0, 1]], in_tensor[..., [0, 2]], in_tensor[..., [1, 2]]], dim=0)
+
+        # Stop gradients from going to sampler
+        plane_coord = plane_coord.detach().view(3, -1, 1, 2)
+        plane_features = F.grid_sample(
+            self.plane_coef, plane_coord, align_corners=True
+        )  # [3, num_components, flattened_bs, 1]
+
+        if self.reduce == "product":
+            plane_features = plane_features.prod(0).squeeze(-1).T  # [flattened_bs, num_components]
+        else:
+            plane_features = plane_features.sum(0).squeeze(-1).T
+
+        return plane_features.reshape(*original_shape[:-1], self.num_components)
+
+    @torch.no_grad()
+    def upsample_grid(self, resolution: int) -> None:
+        """Upsamples underlying feature grid
+
+        Args:
+            resolution: Target resolution.
+        """
+        plane_coef = F.interpolate(
+            self.plane_coef.data, size=(resolution, resolution), mode="bilinear", align_corners=True
+        )
+
+        self.plane_coef = torch.nn.Parameter(plane_coef)
+        self.resolution = resolution
 
 class GaussianModel:
 
@@ -68,24 +133,27 @@ class GaussianModel:
             self.vq_rot = ResidualVQ(dim = 4, codebook_size = model.rvq_size, num_quantizers = model.rvq_num, decay = 0.8, commitment_weight = 0., kmeans_init = True, kmeans_iters = 1).cuda()
             self.rvq_bit = math.log2(model.rvq_size)
             self.rvq_num = model.rvq_num
-        self.recolor = tcnn.Encoding(
-                 n_input_dims=3,
-                 encoding_config={
-                    "otype": "HashGrid",
-                    "n_levels": 16,
-                    "n_features_per_level": 2,
-                    "log2_hashmap_size": model.max_hashmap,
-                    "base_resolution": 16,
-                    "per_level_scale": 1.447,
-                },
-        )
+        # self.recolor = tcnn.Encoding(
+        #          n_input_dims=3,
+        #          encoding_config={
+        #             "otype": "HashGrid",
+        #             "n_levels": 16,
+        #             "n_features_per_level": 2,
+        #             "log2_hashmap_size": model.max_hashmap,
+        #             "base_resolution": 16,
+        #             "per_level_scale": 1.447,
+        #         },
+        # )
+        self.recolor = TriplaneEncoding(in_dim=3,
+                                        resolution=64,
+                                        num_components=64)
         self.direction_encoding = tcnn.Encoding(
             n_input_dims=3,
             encoding_config={
                 "otype": "SphericalHarmonics",
                 "degree": 3 
             },
-            )
+        )
         self.mlp_head = tcnn.Network(
                 n_input_dims=(self.direction_encoding.n_output_dims+self.recolor.n_output_dims),
                 n_output_dims=3,
