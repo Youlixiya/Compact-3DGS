@@ -144,9 +144,9 @@ class GaussianModel:
                     "per_level_scale": 1.447,
                 },
         )
-        self.recolor = TriplaneEncoding(in_dim=3,
-                                        resolution=64,
-                                        num_components=64).cuda()
+        # self.recolor = TriplaneEncoding(in_dim=3,
+        #                                 resolution=64,
+        #                                 num_components=64).cuda()
         self.direction_encoding = tcnn.Encoding(
             n_input_dims=3,
             encoding_config={
@@ -593,3 +593,93 @@ class GaussianModel:
             x[mask] = (2 - 1 / mag[mask]) * (x[mask] / mag[mask])
             x = x / 4 + 0.5  # [-inf, inf] is at [0, 1]
             return x
+        
+class TriplaneGaussianModel(GaussianModel):
+    use_triplane = True
+    def __init__(self,
+                 model,
+                 rvq=True):
+        super().__init__(model, rvq)
+        self.triplane_encoder = TriplaneEncoding(in_dim=3,
+                                        resolution=64,
+                                        num_components=64)
+        
+    def set_instance_embeddings(self, instance_num):
+        self.instance_num = instance_num
+        self.instance_embeddings = torch.randn((instance_num, self.gs_feature_dim), dtype=torch.float, device=self.device).requires_grad_(True)
+    
+    def set_clip_embeddings(self, clip_embeddings):
+        self.clip_embeddings = clip_embeddings
+    
+    def set_instance_colors(self, instance_colors):
+        self.instance_colors = instance_colors
+    
+    def load_ply(self, path):
+        plydata = PlyData.read(path)
+
+        xyz = np.stack((np.asarray(plydata.elements[0]["x"]),
+                        np.asarray(plydata.elements[0]["y"]),
+                        np.asarray(plydata.elements[0]["z"])),  axis=1)
+        opacities = np.asarray(plydata.elements[0]["opacity"])[..., np.newaxis]
+
+        scale_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("scale_")]
+        scale_names = sorted(scale_names, key = lambda x: int(x.split('_')[-1]))
+        scales = np.zeros((xyz.shape[0], len(scale_names)))
+        for idx, attr_name in enumerate(scale_names):
+            scales[:, idx] = np.asarray(plydata.elements[0][attr_name])
+
+        rot_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("rot")]
+        rot_names = sorted(rot_names, key = lambda x: int(x.split('_')[-1]))
+        rots = np.zeros((xyz.shape[0], len(rot_names)))
+        for idx, attr_name in enumerate(rot_names):
+            rots[:, idx] = np.asarray(plydata.elements[0][attr_name])
+
+        self._xyz = nn.Parameter(torch.tensor(xyz, dtype=torch.float, device="cuda").requires_grad_(True))
+        self._opacity = nn.Parameter(torch.tensor(opacities, dtype=torch.float, device="cuda").requires_grad_(True))
+        self._scaling = nn.Parameter(torch.tensor(scales, dtype=torch.float, device="cuda").requires_grad_(True))
+        self._rotation = nn.Parameter(torch.tensor(rots, dtype=torch.float, device="cuda").requires_grad_(True))
+
+        self.active_sh_degree = self.max_sh_degree
+    
+    def save_feature_params(self, path, iter, extra=''):
+        mkdir_p(os.path.dirname(path))
+        # feature_aggregator_ckpt = self.feature_aggregator.state_dict() if self.feature_aggregator else None
+        state = {
+            'gs_features': self.gs_features.detach().cpu().numpy(),
+            'instance_embeddings': self.instance_embeddings.detach().cpu().numpy(),
+            # 'instance_feature_decoder': self.instance_feature_decoder.state_dict(),
+            'clip_embeddings': self.clip_embeddings,
+            'instance_colors': self.instance_colors.cpu(),
+            'instance_num': self.instance_num,
+        }
+        # # rgb_decode = 'rgb_' if self.rgb_decode else ''
+        # depth_decode = 'depth_' if self.depth_decode else ''
+        save_path = os.path.join(path, f'{extra}_feature_gs_{iter}.pt')
+        torch.save(state, save_path)
+    
+    def load_feature_params(self, params_path):
+        state = torch.load(params_path)
+        self.gs_features = nn.Parameter(torch.tensor(state['gs_features'], dtype=torch.float, device=self.device).requires_grad_(False))
+        self.instance_embeddings = nn.Parameter(torch.tensor(state['instance_embeddings'], dtype=torch.float, device=self.device).requires_grad_(False))
+        self.instance_embeddings = F.normalize(self.instance_embeddings, dim=-1)
+        self.instance_colors = state['instance_colors']
+        self.instance_num = state['instance_num']
+        self.clip_embeddings = state['clip_embeddings']
+        # self.instance_feature_decoder.load_state_dict(state['instance_feature_decoder'])
+        
+    
+    def feature_training_setup(self, training_args):
+        # if self.feature_aggregator is None:
+        #     l = [
+        #         {'params': [self.instance_features], 'lr': training_args.instance_features_lr, "name": "instance_features"},
+        #         # {'params': [self.instance_embeddings], 'lr': training_args.instance_embedding_lr, "name": "instance_embedding"},
+        #     ]
+        # else:
+        l = [
+            {'params': [self.gs_features], 'lr': training_args.instance_features_lr, "name": "instance_features"},
+            {'params': [self.instance_embeddings], 'lr': training_args.instance_embeddings_lr, "name": "instance_embeddings"},
+            # {'params': self.instance_feature_decoder.parameters(), 'lr': training_args.instance_feature_decoder_lr, "name": "instance_feature_decoder"},
+        ]
+
+        self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
+        

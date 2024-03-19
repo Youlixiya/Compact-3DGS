@@ -11,11 +11,20 @@
 
 import torch
 import math
-from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianRasterizer
+from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianRasterizer, GaussianFeatureRasterizer
 from scene.gaussian_model import GaussianModel
 from utils.sh_utils import eval_sh
 
-def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, override_color = None, itr=-1, rvq_iter=False):
+def render(viewpoint_camera,
+           pc : GaussianModel,
+           pipe,
+           bg_color : torch.Tensor,
+           scaling_modifier = 1.0,
+           render_feature = False,
+           override_feature=None,
+           override_color = None,
+           itr=-1,
+           rvq_iter=False):
     """
     Render the scene. 
     
@@ -33,6 +42,14 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     tanfovx = math.tan(viewpoint_camera.FoVx * 0.5)
     tanfovy = math.tan(viewpoint_camera.FoVy * 0.5)
 
+    if render_feature:
+        # bg_color = torch.tensor(
+        #     [0] * override_feature.shape[-1], dtype=torch.float32, device="cuda"
+        # )
+        Rasterizer = GaussianFeatureRasterizer
+    else:
+        Rasterizer = GaussianRasterizer
+    
     raster_settings = GaussianRasterizationSettings(
         image_height=int(viewpoint_camera.image_height),
         image_width=int(viewpoint_camera.image_width),
@@ -48,59 +65,77 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         debug=pipe.debug
     )
 
-    rasterizer = GaussianRasterizer(raster_settings=raster_settings)
+    rasterizer = Rasterizer(raster_settings=raster_settings)
 
     means3D = pc.get_xyz
     means2D = screenspace_points
     cov3D_precomp = None
     l_vqsca=0
     l_vqrot=0
-    if itr == -1:
-        scales = pc._scaling
-        rotations = pc._rotation
-        opacity = pc._opacity
-        
-        dir_pp = (means3D - viewpoint_camera.camera_center.repeat(means3D.shape[0], 1))
-        dir_pp = dir_pp/dir_pp.norm(dim=1, keepdim=True)
-        shs = pc.mlp_head(torch.cat([pc._feature, pc.direction_encoding(dir_pp)], dim=-1)).unsqueeze(1)
-        
-    else:
-        mask = ((torch.sigmoid(pc._mask) > 0.01).float()- torch.sigmoid(pc._mask)).detach() + torch.sigmoid(pc._mask)
-        if rvq_iter:
-            scales, _, l_vqsca = pc.vq_scale(pc.get_scaling.unsqueeze(0))
-            rotations, _, l_vqrot = pc.vq_rot(pc.get_rotation.unsqueeze(0))
-            scales = scales.squeeze()*mask
-            rotations = rotations.squeeze()
-            opacity = pc.get_opacity*mask
-
-            l_vqsca = torch.sum(l_vqsca)
-            l_vqrot = torch.sum(l_vqrot)
-        else:
-            scales = pc.get_scaling*mask
-            rotations = pc.get_rotation
-            opacity = pc.get_opacity*mask
+    shs = None
+    if not render_feature:
+        if itr == -1:
+            scales = pc._scaling
+            rotations = pc._rotation
+            opacity = pc._opacity
             
-        xyz = pc.contract_to_unisphere(means3D.clone().detach(), torch.tensor([-1.0, -1.0, -1.0, 1.0, 1.0, 1.0], device='cuda'))
-        # xyz = xyz * 2 - 1
-        dir_pp = (means3D - viewpoint_camera.camera_center.repeat(means3D.shape[0], 1))
-        dir_pp = dir_pp/dir_pp.norm(dim=1, keepdim=True)
-        shs = pc.mlp_head(torch.cat([pc.recolor(xyz), pc.direction_encoding(dir_pp)], dim=-1)).unsqueeze(1)
+            dir_pp = (means3D - viewpoint_camera.camera_center.repeat(means3D.shape[0], 1))
+            dir_pp = dir_pp/dir_pp.norm(dim=1, keepdim=True)
+            shs = pc.mlp_head(torch.cat([pc._feature, pc.direction_encoding(dir_pp)], dim=-1)).unsqueeze(1)
+            
+        else:
+            mask = ((torch.sigmoid(pc._mask) > 0.01).float()- torch.sigmoid(pc._mask)).detach() + torch.sigmoid(pc._mask)
+            if rvq_iter:
+                scales, _, l_vqsca = pc.vq_scale(pc.get_scaling.unsqueeze(0))
+                rotations, _, l_vqrot = pc.vq_rot(pc.get_rotation.unsqueeze(0))
+                scales = scales.squeeze()*mask
+                rotations = rotations.squeeze()
+                opacity = pc.get_opacity*mask
 
-    # Rasterize visible Gaussians to image, obtain their radii (on screen). 
-    rendered_image, radii = rasterizer(
-        means3D = means3D.float(),
-        means2D = means2D,
-        shs = shs.float(),
-        colors_precomp = None,
-        opacities = opacity,
-        scales = scales,
-        rotations = rotations,
-        cov3D_precomp = None)
-
+                l_vqsca = torch.sum(l_vqsca)
+                l_vqrot = torch.sum(l_vqrot)
+            else:
+                scales = pc.get_scaling*mask
+                rotations = pc.get_rotation
+                opacity = pc.get_opacity*mask
+                
+            xyz = pc.contract_to_unisphere(means3D.clone().detach(), torch.tensor([-1.0, -1.0, -1.0, 1.0, 1.0, 1.0], device='cuda'))
+            # xyz = xyz * 2 - 1
+            dir_pp = (means3D - viewpoint_camera.camera_center.repeat(means3D.shape[0], 1))
+            dir_pp = dir_pp/dir_pp.norm(dim=1, keepdim=True)
+            shs = pc.mlp_head(torch.cat([pc.recolor(xyz), pc.direction_encoding(dir_pp)], dim=-1)).unsqueeze(1)
+        # Rasterize visible Gaussians to image, obtain their radii (on screen). 
+    
+    
+        rendered_image, radii, depth = rasterizer(
+            means3D = means3D.float(),
+            means2D = means2D,
+            shs = shs.float(),
+            colors_precomp = None,
+            opacities = opacity,
+            scales = scales,
+            rotations = rotations,
+            cov3D_precomp = None)
+        rendered_feature = None
+    else:
+        rendered_feature, radii, depth = rasterizer(
+            means3D=means3D.float(),
+            means2D=means2D,
+            shs=shs,
+            colors_precomp=override_feature,
+            opacities=opacity,
+            scales=scales,
+            rotations=rotations,
+            cov3D_precomp=None,
+            )
+        rendered_image = None
     # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
     # They will be excluded from value updates used in the splitting criteria.
-    return {"render": rendered_image,
-            "viewspace_points": screenspace_points,
-            "visibility_filter" : radii > 0,
-            "radii": radii,
-            "vqloss": l_vqsca+l_vqrot}
+    return {
+        "render": rendered_image,
+        "render_feature": rendered_feature,
+        "viewspace_points": screenspace_points,
+        "visibility_filter": radii > 0,
+        "radii": radii,
+        "depth_3dgs": depth,
+    }

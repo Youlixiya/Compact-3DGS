@@ -6,12 +6,12 @@ import torch
 import math
 import numpy as np
 from PIL import Image
-from tqdm import tqdm
+from tqdm import tqdm, trange
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 import torchvision.transforms as T
 from torch.utils.data import Dataset
-from torchvision import transforms
+import torchvision
 
 IMAGENET_DEFAULT_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_DEFAULT_STD = (0.229, 0.224, 0.225)
@@ -33,6 +33,16 @@ class MaskDataset(Dataset):
         img_suffix = os.listdir(os.path.join(source_root, self.img_dir))[0].split('.')[-1]
         self.imgs_name = [f'{camera.image_name}.{img_suffix}' for camera in cameras]
         self.masks_path = os.path.join(source_root, f'{mask_dir}.npz')
+        self.process = torchvision.transforms.Compose(
+            [
+                torchvision.transforms.Resize((224, 224)),
+                torchvision.transforms.ToTensor(),
+                torchvision.transforms.Normalize(
+                    mean=[0.48145466, 0.4578275, 0.40821073],
+                    std=[0.26862954, 0.26130258, 0.27577711],
+                ),
+            ]
+        )
         if os.path.exists(self.masks_path):
             colors_masks = np.load(self.masks_path, allow_pickle=True)['arr_0'].tolist()
             self.instance_masks = colors_masks['instance_masks']
@@ -50,16 +60,7 @@ class MaskDataset(Dataset):
                                                                                      pretrained=clip_model_pretrained,
                                                                                      precision="fp16",
                                                                                      device=device)
-            clip_ckpt = torch.load(clip_model_pretrained)
-            self.clip_model.load_state_dict(clip_ckpt)
-            # self.clip_model, _, self.preprocess = open_clip.create_model_and_transforms(
-            #     clip_model_type,  # e.g., ViT-B-16
-            #     pretrained=clip_model_pretrained,  # e.g., laion2b_s34b_b88k
-            #     precision="fp16",
-            # )
             self.clip_model = self.clip_model.to(device)
-            # self.tokenizer = open_clip.get_tokenizer(clip_model_type)
-            # self.clip_model, self.preprocess = clip.load(clip_type, device=device)
             self.set_colors()
             self.asign_masks()
             del self.masks
@@ -69,7 +70,6 @@ class MaskDataset(Dataset):
                                             'instance_colors':self.instance_colors,
                                             'clip_embeddings':self.clip_embeddings})
             
-        # print(torch.sum(self.mask_labels))
         torch.cuda.empty_cache()
     
     def __len__(self):
@@ -85,22 +85,17 @@ class MaskDataset(Dataset):
         for mask in tqdm(self.masks):
             self.instance_colors += torch.unique(mask.reshape(-1, 3), dim=0).tolist()
         self.instance_colors = torch.unique(torch.tensor(self.instance_colors, dtype=torch.uint8), dim=0)
-        # self.semantic_colors = []
         
     @torch.no_grad()
     def asign_masks(self):
         n, h, w, c = self.masks.shape
-        # self.semantic_masks = torch.zeros((n, h, w, 1), device=self.device)
         self.instance_masks = torch.zeros((n, h, w, 1), device=self.device)
         self.clip_embeddings = []
         for i in trange(len(self.instance_colors)):
         # for i in trange(3):
             mask = self.masks.reshape(n * h * w, -1)
-            # print(self.unique_colors[i])
             target_color = self.instance_colors[i][None, :].to(self.device).expand(mask.size())
             indexs = torch.eq(mask, target_color).all(dim=1).reshape(n, h, w)
-            # print(torch.sum(index.float()))
-            # index = (self.masks.reshape(n * h * w, -1) == self.unique_colors[i].to(self.device)).reshape(n, h, w)
             self.instance_masks[indexs, :] = i
             tmp_clip_embedding = None
             for j, index in enumerate(indexs):
@@ -112,9 +107,6 @@ class MaskDataset(Dataset):
                         semantic_similarity = torch.nn.functional.cosine_similarity(mask_embedding[None], tmp_clip_embedding[None])
                         if semantic_similarity >= self.semantic_similarity:
                             tmp_clip_embedding = torch.nn.functional.normalize(tmp_clip_embedding + mask_embedding, dim=-1)
-                    # tmp_clip_embedding.append(mask_embedding)
-            # mask_embedding = torch.nn.functional.normalize(torch.stack(tmp_clip_embedding).mean(0), dim=-1)
-            # self.clip_embeddings.append(mask_embedding)
             self.clip_embeddings.append(tmp_clip_embedding)
         
         self.instance_masks = self.instance_masks.long()
@@ -137,54 +129,19 @@ class MaskDataset(Dataset):
         bottom_right = max_indices + 1
         return top_left[1].item(), top_left[0].item(), bottom_right[1].item(), bottom_right[0].item()
     
-    # @torch.no_grad()
-    # def get_clip_embedding(self, mask, img):
-    #     img_tensor = self.preprocess(Image.fromarray(img)).half().to(self.device)
-    #     mask_tensor = self.mask_transform((mask * 255).astype(np.uint8))[None].half().to(self.device)
-    #     mask_image_feature = self.clip_model.visual(img_tensor, mask_tensor).squeeze(0)
-    #     # mask_image_feature = mask_image_feature / mask_image_feature.norm(dim=-1, keepdim=True)
-    #     mask_image_feature = torch.nn.functional.normalize(mask_image_feature, dim=-1)
-    #     # x1, y1, x2, y2 = self.get_box_by_mask(mask)
-    #     # img[~mask.cpu().numpy(), :] = np.uint8([255, 255, 255])
-    #     # img_patch = Image.fromarray(img[y1:y2, x1:x2, :])
-    #     # img_patch_tensor = self.preprocess(img_patch).unsqueeze(0).cuda().half()
-    #     # img_patch_feature = self.clip_model.encode_image(img_patch_tensor).squeeze(0)
-    #     # img_patch_feature = torch.nn.functional.normalize(img_patch_feature, dim=-1)
-    #     return mask_image_feature
-    
     @torch.no_grad()
     def get_clip_embedding(self, mask, img):
-        img_tensor = torch.tensor(img, dtype=torch.float32).permute(2, 0, 1).cpu()
-        mask_tensor = torch.tensor(mask)[None].cpu()
-        (regions, unnorm_regions), region_masks = self.preprocess(img_tensor, mask_tensor)
-        mask_image_feature = self.clip_model.encode_image(regions.cuda(), region_masks.cuda()).squeeze(0)
-        # mask_image_feature = mask_image_feature / mask_image_feature.norm(dim=-1, keepdim=True)
+        mask_img = img.copy()
+        mask_img[mask, :] = np.array([0, 0, 0])
+        x1, y1, x2, y2 = self.get_box_by_mask(mask)
+        mask_img = mask_img[y1:y2, x1:x2]
+        img_tensor = self.preprocess(Image.fromarray(mask_img)).half().to(self.device)
+        mask_image_feature = self.clip_model.encode_image(img_tensor)
+        mask_image_feature = mask_image_feature / mask_image_feature.norm(dim=-1, keepdim=True)
         mask_image_feature = torch.nn.functional.normalize(mask_image_feature, dim=-1)
-        # x1, y1, x2, y2 = self.get_box_by_mask(mask)
-        # img[~mask.cpu().numpy(), :] = np.uint8([255, 255, 255])
-        # img_patch = Image.fromarray(img[y1:y2, x1:x2, :])
-        # img_patch_tensor = self.preprocess(img_patch).unsqueeze(0).cuda().half()
-        # img_patch_feature = self.clip_model.encode_image(img_patch_tensor).squeeze(0)
-        # img_patch_feature = torch.nn.functional.normalize(img_patch_feature, dim=-1)
+        mask_image_feature = mask_image_feature.squeeze(0)
         return mask_image_feature
     
-    # @torch.no_grad()
-    # def get_clip_embedding(self, mask, img):
-    #     x1, y1, x2, y2 = self.get_box_by_mask(mask)
-    #     img[~mask.cpu().numpy(), :] = np.uint8([255, 255, 255])
-    #     img_patch = Image.fromarray(img[y1:y2, x1:x2, :])
-    #     img_patch_tensor = self.preprocess(img_patch).unsqueeze(0).cuda().half()
-    #     img_patch_feature = self.clip_model.encode_image(img_patch_tensor).squeeze(0)
-    #     img_patch_feature = torch.nn.functional.normalize(img_patch_feature, dim=-1)
-    #     return img_patch_feature
-        
-            
-            
-    
-   
-    
-    
-        
 
 # if __name__ == '__main__':
     # extractor = AutoEmbeddingExtractor('Grounded-SAM/weights/sam_vit_h_4b8939.pth', 'vit_h', 
