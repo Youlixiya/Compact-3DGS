@@ -128,10 +128,11 @@ def render(viewpoint_camera,
         # print(triplane_tokens.shape)triplane_index
         # print(encoder_hidden_states.shape)
         # triplane_lowres = pc.triplane_tokens.detokenize(pc.triplane_tokens[triplane_index])[0]
-        triplane = pc.triplane_tokens[triplane_index]
-        # triplane = pc.triplane_upsample(triplane_lowres)
+        triplane_lowres = pc.triplane_tokens[triplane_index].embeddings
+        triplane = pc.triplane_upsample(triplane_lowres)
         # masks_precomp = pc.triplane_encoder(xyz)
-        masks_precomp = triplane_sample(triplane.embeddings, xyz)
+        # masks_precomp = torch.sigmoid(triplane_sample(triplane, xyz))
+        masks_precomp = triplane_sample(triplane, xyz)
         # masks_precomp = pc.mask_mlp(mask_feature)
         rendered_feature, radii, depth = rasterizer(
             means3D=means3D.float(),

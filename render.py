@@ -111,10 +111,12 @@ class OpenCLIPNetwork(nn.Module):
 def render_set(model_path, name, iteration, views, gaussians, pipeline, background, mask_background, args, masks_index):
     render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders")
     mask_render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "mask_renders")
+    mask_image_render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "mask_image_renders")
     gts_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt")
 
     makedirs(render_path, exist_ok=True)
     makedirs(mask_render_path, exist_ok=True)
+    makedirs(mask_image_render_path, exist_ok=True)
     makedirs(gts_path, exist_ok=True)
 
     # mask_index = args.mask_index
@@ -132,13 +134,17 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         rendered_masks = []
         for mask_index in masks_index:
             rendered_mask = render(view, gaussians, pipeline, mask_background, render_feature=True, triplane_index=mask_index)['render_feature']
-            rendered_mask = rendered_mask > 0.5
+            rendered_mask = rendered_mask > 0.8
             rendered_masks.append(rendered_mask)
         rendered_masks = torch.cat(rendered_masks, 0)
-        rendered_masks = (torch.sum(rendered_masks, dim=0) > 0).float()
+        rendered_masks = torch.sum(rendered_masks, dim=0) > 0
+        rendered_mask_image = rendering.clone()
+        rendered_mask_image[:, ~rendered_masks] = torch.tensor([[1, 1, 1]], device='cuda', dtype=torch.float32).permute(1, 0)
+        rendered_masks = rendered_masks.float()
         gt = view.original_image[0:3, :, :]
         torchvision.utils.save_image(rendering, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
         torchvision.utils.save_image(rendered_masks, os.path.join(mask_render_path, '{0:05d}'.format(idx) + ".png"))
+        torchvision.utils.save_image(rendered_mask_image, os.path.join(mask_image_render_path, '{0:05d}'.format(idx) + ".png"))
         torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
 
 def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool, args):
@@ -148,14 +154,17 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
         params_path = os.path.join(dataset.model_path,
                             "point_cloud",
                             "iteration_" + str(30000),
-                            f"mask_triplane_{2000}.pt")
+                            f"mask_triplane_{1000}.pt")
         gaussians.load_feature_params(params_path)
         
         gaussians.precompute()
         clip = OpenCLIPNetwork(OpenCLIPNetworkConfig())
         clip.set_positives(args.text_prompt.split(','))
         relevancy = clip.get_relevancy(gaussians.clip_embeddings, 0)[..., 0]
-        masks_index = torch.nonzero(relevancy > args.mask_threshold)
+        if args.top_one:
+            masks_index = torch.argmax(relevancy).unsqueeze(0)
+        else:
+            masks_index = torch.nonzero(relevancy > args.mask_threshold)
         print(masks_index)
         bg_color = [1,1,1] if dataset.white_background else [0, 0, 0]
         mask_bg_color = [0]
@@ -174,7 +183,8 @@ if __name__ == "__main__":
     model = ModelParams(parser, sentinel=True)
     pipeline = PipelineParams(parser)
     parser.add_argument("--iteration", default=-1, type=int)
-    parser.add_argument("--mask_threshold", default=0.6, type=float)
+    parser.add_argument("--mask_threshold", default=0.5, type=float)
+    parser.add_argument("--top_one", default=True, type=bool)
     parser.add_argument("--text_prompt", default='', type=str)
     parser.add_argument("--skip_train", action="store_true")
     parser.add_argument("--skip_test", action="store_true")

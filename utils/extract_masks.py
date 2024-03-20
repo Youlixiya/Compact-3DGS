@@ -133,7 +133,7 @@ class MaskDataset(Dataset):
     @torch.no_grad()
     def get_clip_embedding(self, mask, img):
         mask_img = img.copy()
-        mask_img[mask, :] = np.array([0, 0, 0])
+        mask_img[~mask, :] = np.array([0, 0, 0])
         x1, y1, x2, y2 = self.get_box_by_mask(mask)
         mask_img = mask_img[y1:y2, x1:x2]
         img_tensor = self.preprocess(Image.fromarray(mask_img)).half().to(self.device)[None]

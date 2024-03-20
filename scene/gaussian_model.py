@@ -1228,10 +1228,24 @@ class TriplaneGaussianModel(GaussianModel):
     def set_triplane_tokens(self, instance_num):
         self.triplane_tokens = nn.ModuleList(
             [
-                TriplaneTokens(resolution=256,
-                               num_components=1)
+                TriplaneTokens(resolution=32,
+                               num_components=16)
                 for _ in range(instance_num)
             ]
+        ).to(self.device)
+        self.triplane_upsample = nn.Sequential(
+            nn.ConvTranspose2d(
+                16, 8, kernel_size=2, stride=2
+            ),
+            nn.ConvTranspose2d(
+                8, 4, kernel_size=2, stride=2
+            ),
+            nn.ConvTranspose2d(
+                4, 2, kernel_size=2, stride=2
+            ),
+            nn.ConvTranspose2d(
+                2, 1, kernel_size=2, stride=2
+            ),
         ).to(self.device)
     
     def set_instance_embeddings(self, instance_num):
@@ -1278,7 +1292,7 @@ class TriplaneGaussianModel(GaussianModel):
             'instance_embeddings': self.instance_embeddings.detach().cpu().numpy(),
             # 'triplane_encoder': self.triplane_encoder.state_dict(),
             'triplane_tokens': self.triplane_tokens.state_dict(),
-            # 'triplane_upsample': self.triplane_upsample.state_dict(),
+            'triplane_upsample': self.triplane_upsample.state_dict(),
             # 'transformer': self.transformer.state_dict(),
             # 'mask_mlp': self.mask_mlp.state_dict(),
             # 'instance_feature_decoder': self.instance_feature_decoder.state_dict(),
@@ -1301,7 +1315,7 @@ class TriplaneGaussianModel(GaussianModel):
         self.set_triplane_tokens(self.instance_num)
         # self.triplane_encoder.load_state_dict(state['triplane_encoder'])
         self.triplane_tokens.load_state_dict(state['triplane_tokens'])
-        # self.triplane_upsample.load_state_dict(state['triplane_upsample'])
+        self.triplane_upsample.load_state_dict(state['triplane_upsample'])
         # self.transformer.load_state_dict(state['transformer'])
         # self.mask_mlp.load_state_dict(state['mask_mlp'])
         # self.instance_feature_decoder.load_state_dict(state['instance_feature_decoder'])
@@ -1311,7 +1325,7 @@ class TriplaneGaussianModel(GaussianModel):
         l = [
             # {'params': self.triplane_encoder.parameters(), 'lr': training_args.triplane_encoder_lr, "name": "triplane_encoder"},
             {'params': self.triplane_tokens.parameters(), 'lr': training_args.triplane_tokens_lr, "name": "triplane_tokens"},
-            # {'params': self.triplane_upsample.parameters(), 'lr': training_args.triplane_upsample_lr, "name": "triplane_upsample"},
+            {'params': self.triplane_upsample.parameters(), 'lr': training_args.triplane_upsample_lr, "name": "triplane_upsample"},
             # {'params': self.transformer.parameters(), 'lr': training_args.transformer_lr, "name": "transformer"},
             # {'params': self.mask_mlp.parameters(), 'lr': training_args.mask_mlp_lr, "name": "mask_mlp"},
             {'params': [self.instance_embeddings], 'lr': training_args.instance_embeddings_lr, "name": "instance_embeddings"},

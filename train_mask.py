@@ -124,7 +124,7 @@ if __name__ == "__main__":
     lp = ModelParams(parser)
     op = OptimizationParams(parser)
     pp = PipelineParams(parser)
-    parser.add_argument("--save_iterations", nargs="+", type=int, default=[2_000])
+    parser.add_argument("--save_iterations", nargs="+", type=int, default=[1_000])
     parser.add_argument("--gs_source", type=str, required=True)  # gs ply or obj file?
     parser.add_argument("--colmap_dir", type=str, required=True)  #
     args = parser.parse_args(sys.argv[1:])
