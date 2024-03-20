@@ -138,4 +138,5 @@ def render(viewpoint_camera,
         "visibility_filter": radii > 0,
         "radii": radii,
         "depth_3dgs": depth,
+        "vqloss": l_vqsca+l_vqrot
     }
