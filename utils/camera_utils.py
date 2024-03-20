@@ -9,7 +9,7 @@
 # For inquiries contact  george.drettakis@inria.fr
 #
 
-from scene.cameras import Camera
+from scene.cameras import Camera, Simple_Camera
 import numpy as np
 from utils.general_utils import PILtoTorch
 from utils.graphics_utils import fov2focal
@@ -57,6 +57,17 @@ def cameraList_from_camInfos(cam_infos, resolution_scale, args):
     for id, c in enumerate(cam_infos):
         camera_list.append(loadCam(args, id, c, resolution_scale))
 
+    return camera_list
+
+def cameraList_load(cam_infos, h, w):
+    camera_list = []
+
+    for id, c in enumerate(cam_infos):
+        camera_list.append(
+            Simple_Camera(colmap_id=c.uid, R=c.R, T=c.T,
+                   FoVx=c.FovX, FoVy=c.FovY, h=h, w=w, qvec = c.qvec,
+                   image_name=c.image_name, uid=id, data_device='cuda')
+        )
     return camera_list
 
 def camera_to_JSON(id, camera : Camera):

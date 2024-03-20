@@ -33,7 +33,7 @@ class MaskDataset(Dataset):
         img_suffix = os.listdir(os.path.join(source_root, self.img_dir))[0].split('.')[-1]
         self.imgs_name = [f'{camera.image_name}.{img_suffix}' for camera in cameras]
         self.masks_path = os.path.join(source_root, f'{mask_dir}.npz')
-        self.process = torchvision.transforms.Compose(
+        self.preprocess = torchvision.transforms.Compose(
             [
                 torchvision.transforms.Resize((224, 224)),
                 torchvision.transforms.ToTensor(),
@@ -100,7 +100,8 @@ class MaskDataset(Dataset):
             tmp_clip_embedding = None
             for j, index in enumerate(indexs):
                 if torch.sum(index) > 0:
-                    mask_embedding = self.get_clip_embedding(index.cpu().numpy().copy(), self.imgs[j].copy())
+                    # mask_embedding = self.get_clip_embedding(index.cpu().numpy().copy(), self.imgs[j].copy())
+                    mask_embedding = self.get_clip_embedding(index.cpu().clone(), self.imgs[j].copy())
                     if tmp_clip_embedding is None:
                         tmp_clip_embedding = mask_embedding
                     else:
@@ -135,7 +136,7 @@ class MaskDataset(Dataset):
         mask_img[mask, :] = np.array([0, 0, 0])
         x1, y1, x2, y2 = self.get_box_by_mask(mask)
         mask_img = mask_img[y1:y2, x1:x2]
-        img_tensor = self.preprocess(Image.fromarray(mask_img)).half().to(self.device)
+        img_tensor = self.preprocess(Image.fromarray(mask_img)).half().to(self.device)[None]
         mask_image_feature = self.clip_model.encode_image(img_tensor)
         mask_image_feature = mask_image_feature / mask_image_feature.norm(dim=-1, keepdim=True)
         mask_image_feature = torch.nn.functional.normalize(mask_image_feature, dim=-1)

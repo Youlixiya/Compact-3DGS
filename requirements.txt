@@ -2,3 +2,5 @@ plyfile==0.8.1
 dahuffman==0.4.1
 vector-quantize-pytorch==1.8.1
 open-clip-torch
+opencv-python
+scikit-learn

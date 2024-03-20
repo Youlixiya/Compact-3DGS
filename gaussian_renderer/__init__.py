@@ -12,8 +12,9 @@
 import torch
 import math
 from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianRasterizer, GaussianFeatureRasterizer
-from scene.gaussian_model import GaussianModel
+from scene.gaussian_model import GaussianModel, TriplaneGaussianModel
 from utils.sh_utils import eval_sh
+from scene.modules import triplane_sample
 
 def render(viewpoint_camera,
            pc : GaussianModel,
@@ -21,8 +22,8 @@ def render(viewpoint_camera,
            bg_color : torch.Tensor,
            scaling_modifier = 1.0,
            render_feature = False,
-           override_feature=None,
-           override_color = None,
+           triplane_index = -1,
+           encoder_hidden_states = None,
            itr=-1,
            rvq_iter=False):
     """
@@ -118,16 +119,31 @@ def render(viewpoint_camera,
             cov3D_precomp = None)
         rendered_feature = None
     else:
+        scales = pc._scaling
+        rotations = pc._rotation
+        opacity = pc._opacity
+        xyz = pc.contract_to_unisphere(means3D.clone().detach(), torch.tensor([-1.0, -1.0, -1.0, 1.0, 1.0, 1.0], device='cuda'))
+        xyz = xyz * 2 - 1
+        # triplane_tokens = pc.triplane_tokens(1)
+        # print(triplane_tokens.shape)triplane_index
+        # print(encoder_hidden_states.shape)
+        # triplane_lowres = pc.triplane_tokens.detokenize(pc.triplane_tokens[triplane_index])[0]
+        triplane = pc.triplane_tokens[triplane_index]
+        # triplane = pc.triplane_upsample(triplane_lowres)
+        # masks_precomp = pc.triplane_encoder(xyz)
+        masks_precomp = triplane_sample(triplane.embeddings, xyz)
+        # masks_precomp = pc.mask_mlp(mask_feature)
         rendered_feature, radii, depth = rasterizer(
             means3D=means3D.float(),
             means2D=means2D,
             shs=shs,
-            colors_precomp=override_feature,
+            colors_precomp=masks_precomp.float(),
             opacities=opacity,
             scales=scales,
             rotations=rotations,
             cov3D_precomp=None,
             )
+        rendered_feature = torch.sigmoid(rendered_feature)
         rendered_image = None
     # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
     # They will be excluded from value updates used in the splitting criteria.
