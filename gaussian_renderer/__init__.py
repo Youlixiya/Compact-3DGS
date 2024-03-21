@@ -101,10 +101,15 @@ def render(viewpoint_camera,
                 opacity = pc.get_opacity*mask
                 
             xyz = pc.contract_to_unisphere(means3D.clone().detach(), torch.tensor([-1.0, -1.0, -1.0, 1.0, 1.0, 1.0], device='cuda'))
-            # xyz = xyz * 2 - 1
+            xyz = xyz * 2 - 1
             dir_pp = (means3D - viewpoint_camera.camera_center.repeat(means3D.shape[0], 1))
             dir_pp = dir_pp/dir_pp.norm(dim=1, keepdim=True)
-            shs = pc.mlp_head(torch.cat([pc.recolor(xyz), pc.direction_encoding(dir_pp)], dim=-1)).unsqueeze(1)
+            
+            # triplane = pc.recolor.embeddings
+            triplane_lowres = pc.recolor.embeddings
+            triplane = pc.recolor_upsample(triplane_lowres)
+            shs = pc.mlp_head(torch.cat([triplane_sample(triplane, xyz), pc.direction_encoding(dir_pp)], dim=-1)).unsqueeze(1)
+            # shs = pc.mlp_head(torch.cat([pc.recolor(xyz), pc.direction_encoding(dir_pp)], dim=-1)).unsqueeze(1)
         # Rasterize visible Gaussians to image, obtain their radii (on screen). 
     
     

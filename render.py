@@ -134,7 +134,7 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         rendered_masks = []
         for mask_index in masks_index:
             rendered_mask = render(view, gaussians, pipeline, mask_background, render_feature=True, triplane_index=mask_index)['render_feature']
-            rendered_mask = rendered_mask > 0.8
+            rendered_mask = rendered_mask > 0.7
             rendered_masks.append(rendered_mask)
         rendered_masks = torch.cat(rendered_masks, 0)
         rendered_masks = torch.sum(rendered_masks, dim=0) > 0
