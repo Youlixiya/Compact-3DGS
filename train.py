@@ -45,8 +45,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     scene = Scene(dataset, gaussians)
     img_name = os.listdir(os.path.join(dataset.source_path, images))[0]
     h, w = cv2.imread(os.path.join(dataset.source_path, images, img_name)).shape[:2]
-    h = h // 8
-    w = w // 8
+    # h = h // 8
+    # w = w // 8
     scene = CamScene(dataset.source_path, h=h, w=w, eval=True)
     latent_image_dataset = LatentImageDataset(dataset.source_path, scene.cameras.copy(), vae, latent_dir=latent_images)
     gaussians.training_setup(opt)
@@ -91,9 +91,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         # Loss
         # gt_image = viewpoint_cam.original_image.cuda()
-        gt_image = latent_image_dataset[index]
+        gt_image = torch.nn.functional.interpolate(latent_image_dataset[index][None], size=(h, w), mode='bilinear')[0]
         # Ll1 = l2_loss(image, gt_image.float())
-        Ll1 = torch.nn.functional.mse_loss(image, gt_image.float())
+        Ll1 = torch.nn.functional.mse_loss(image, gt_image)
         # loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image)) + render_pkg["vqloss"] + opt.lambda_mask*torch.mean((torch.sigmoid(gaussians._mask)))
         loss = Ll1 + render_pkg["vqloss"] + opt.lambda_mask*torch.mean((torch.sigmoid(gaussians._mask)))
         loss.backward()

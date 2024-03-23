@@ -100,7 +100,7 @@ class OptimizationParams(ParamGroup):
         self.mask_prune_iter = 1_000
         self.rvq_iter = 29_000
         self.mask_lr = 0.01
-        self.net_lr = 0.001
+        self.net_lr = 0.01
         self.net_lr_step = [5_000, 15_000, 25_000]
         self.lambda_mask = 0.0005
         super().__init__(parser, "Optimization Parameters")
