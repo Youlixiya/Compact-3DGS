@@ -23,7 +23,6 @@ def render(viewpoint_camera,
            scaling_modifier = 1.0,
            render_feature = False,
            triplane_index = -1,
-           encoder_hidden_states = None,
            itr=-1,
            rvq_iter=False):
     """
@@ -82,7 +81,8 @@ def render(viewpoint_camera,
             
             dir_pp = (means3D - viewpoint_camera.camera_center.repeat(means3D.shape[0], 1))
             dir_pp = dir_pp/dir_pp.norm(dim=1, keepdim=True)
-            shs = pc.mlp_head(torch.cat([pc._feature, pc.direction_encoding(dir_pp)], dim=-1)).unsqueeze(1)
+            # shs = pc.mlp_head(torch.cat([pc._feature, pc.direction_encoding(dir_pp)], dim=-1)).unsqueeze(1)
+            colors_precomp = pc.mlp_head(torch.cat([pc._feature, pc.direction_encoding(dir_pp)], dim=-1)).unsqueeze(1)
             
         else:
             mask = ((torch.sigmoid(pc._mask) > 0.01).float()- torch.sigmoid(pc._mask)).detach() + torch.sigmoid(pc._mask)
@@ -108,7 +108,8 @@ def render(viewpoint_camera,
             # triplane = pc.recolor.embeddings
             triplane_lowres = pc.recolor.embeddings
             triplane = pc.recolor_upsample(triplane_lowres)
-            shs = pc.mlp_head(torch.cat([triplane_sample(triplane, xyz), pc.direction_encoding(dir_pp)], dim=-1)).unsqueeze(1)
+            # shs = pc.mlp_head(torch.cat([triplane_sample(triplane, xyz), pc.direction_encoding(dir_pp)], dim=-1)).unsqueeze(1)
+            colors_precomp = pc.mlp_head(torch.cat([triplane_sample(triplane, xyz), pc.direction_encoding(dir_pp)], dim=-1)).unsqueeze(1)
             # shs = pc.mlp_head(torch.cat([pc.recolor(xyz), pc.direction_encoding(dir_pp)], dim=-1)).unsqueeze(1)
         # Rasterize visible Gaussians to image, obtain their radii (on screen). 
     
@@ -116,8 +117,8 @@ def render(viewpoint_camera,
         rendered_image, radii, depth = rasterizer(
             means3D = means3D.float(),
             means2D = means2D,
-            shs = shs.float(),
-            colors_precomp = None,
+            shs = shs,
+            colors_precomp = colors_precomp,
             opacities = opacity,
             scales = scales,
             rotations = rotations,

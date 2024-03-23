@@ -8,6 +8,7 @@ from PIL import Image
 parser = argparse.ArgumentParser()
 parser.add_argument('path', type=str, help="path to the folder that contains `images/`")
 parser.add_argument('--downscale', type=int, default=4)
+parser.add_argument('--factor', type=int, default=8)
 
 opt = parser.parse_args()
 
@@ -20,7 +21,9 @@ def run_image(img_path):
     # img: filepath
     img = Image.open(img_path)
     W, H = img.size
-    img = img.resize((W // opt.downscale, H // opt.downscale), Image.Resampling.BILINEAR)
+    w = (W // opt.downscale // opt.factor) * opt.factor
+    h = (H // opt.downscale // opt.factor) * opt.factor
+    img = img.resize((w, h), Image.Resampling.BILINEAR)
     out_path = os.path.join(out_dir, os.path.basename(img_path))
     img.save(out_path)
 

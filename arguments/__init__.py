@@ -52,6 +52,7 @@ class ModelParams(ParamGroup):
         self._images = "images"
         self._resolution = -1
         self._white_background = False
+        self.vae_model_path = 'ckpts/instruct-pix2pix'
         self.data_device = "cuda"
         self.eval = False
         self.max_hashmap = 19
