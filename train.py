@@ -13,7 +13,7 @@ import os
 import cv2
 import torch
 from random import randint
-from utils.loss_utils import l1_loss, ssim
+from utils.loss_utils import l1_loss, ssim, l2_loss
 from gaussian_renderer import render, network_gui
 import sys
 from scene import Scene, GaussianModel
@@ -36,16 +36,19 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset)
-    vae = AutoencoderKL.from_pretrained(dataset.vae_model_path, subfolder='vae', torch_dtype=torch.float16).to('cuda')
+    vae = AutoencoderKL.from_pretrained(dataset.vae_model_path, subfolder='vae', torch_dtype=torch.float32
+                                        ).to('cuda')
     vae.requires_grad_(False)
+    latent_images = dataset.images
+    images = dataset.images.replace('latents', 'images')
+    dataset.images = dataset.images.replace('latents', 'images')
     scene = Scene(dataset, gaussians)
-    images = dataset.images.replace('latents, images')
     img_name = os.listdir(os.path.join(dataset.source_path, images))[0]
     h, w = cv2.imread(os.path.join(dataset.source_path, images, img_name)).shape[:2]
     h = h // 8
     w = w // 8
     scene = CamScene(dataset.source_path, h=h, w=w, eval=True)
-    latent_image_dataset = LatentImageDataset(args.colmap_dir, scene.cameras.copy(), vae, latent_dir=dataset.images)
+    latent_image_dataset = LatentImageDataset(dataset.source_path, scene.cameras.copy(), vae, latent_dir=latent_images)
     gaussians.training_setup(opt)
     if checkpoint:
         (model_params, first_iter) = torch.load(checkpoint)
@@ -73,7 +76,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         # Pick a random Camera
         if not viewpoint_stack:
-            viewpoint_stack = scene.getTrainCameras().copy()
+            viewpoint_stack = scene.cameras.copy()
         index = randint(0, len(viewpoint_stack)-1)
         viewpoint_cam = viewpoint_stack.pop(index)
 
@@ -89,8 +92,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         # Loss
         # gt_image = viewpoint_cam.original_image.cuda()
         gt_image = latent_image_dataset[index]
-        Ll1 = l1_loss(image, gt_image)
-        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image)) + render_pkg["vqloss"] + opt.lambda_mask*torch.mean((torch.sigmoid(gaussians._mask)))
+        # Ll1 = l2_loss(image, gt_image.float())
+        Ll1 = torch.nn.functional.mse_loss(image, gt_image.float())
+        # loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image)) + render_pkg["vqloss"] + opt.lambda_mask*torch.mean((torch.sigmoid(gaussians._mask)))
+        loss = Ll1 + render_pkg["vqloss"] + opt.lambda_mask*torch.mean((torch.sigmoid(gaussians._mask)))
         loss.backward()
 
         iter_end.record()
@@ -99,7 +104,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             # Progress bar
             ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
             if iteration % 10 == 0:
-                progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{7}f}"})
+                progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{7}f}", "N_GS": gaussians._mask.shape[0]})
                 progress_bar.update(10)
             if iteration == opt.iterations:
                 progress_bar.close()

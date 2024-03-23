@@ -1,15 +1,11 @@
 import os
 from typing import Any
-import cv2
-import open_clip
 import torch
 import math
 import numpy as np
 from PIL import Image
-from tqdm import tqdm, trange
 import torchvision.transforms as T
 from torch.utils.data import Dataset
-import torchvision
 
 def preprocess(images):
     if type(images) == list:
@@ -43,8 +39,7 @@ class LatentImageDataset(Dataset):
         if os.path.exists(self.latent_dir):
             self.latent_images = torch.load(self.latents_path)
         else:
-            img_dir = latent_dir.replace('masks', 'images')
-            self.imgs_path = [os.path.join(source_root, img_dir, img_name) for img_name in self.imgs_name]
+            self.imgs_path = [os.path.join(source_root, self.img_dir, img_name) for img_name in self.imgs_name]
             self.imgs = [Image.open(img_path) for img_path in self.imgs_path]
             # self.imgs = np.stack([cv2.cvtColor(cv2.imread(img_path), cv2.COLOR_BGR2RGB) for img_path in self.imgs_path], axis=0)
             self.device = device           

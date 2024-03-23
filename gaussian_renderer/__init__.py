@@ -42,13 +42,13 @@ def render(viewpoint_camera,
     tanfovx = math.tan(viewpoint_camera.FoVx * 0.5)
     tanfovy = math.tan(viewpoint_camera.FoVy * 0.5)
 
-    if render_feature:
+    # if render_feature:
         # bg_color = torch.tensor(
         #     [0] * override_feature.shape[-1], dtype=torch.float32, device="cuda"
         # )
-        Rasterizer = GaussianFeatureRasterizer
-    else:
-        Rasterizer = GaussianRasterizer
+    Rasterizer = GaussianFeatureRasterizer
+    # else:
+    #     Rasterizer = GaussianRasterizer
     
     raster_settings = GaussianRasterizationSettings(
         image_height=int(viewpoint_camera.image_height),
@@ -101,16 +101,17 @@ def render(viewpoint_camera,
                 opacity = pc.get_opacity*mask
                 
             xyz = pc.contract_to_unisphere(means3D.clone().detach(), torch.tensor([-1.0, -1.0, -1.0, 1.0, 1.0, 1.0], device='cuda'))
-            xyz = xyz * 2 - 1
+            # xyz = xyz * 2 - 1
             dir_pp = (means3D - viewpoint_camera.camera_center.repeat(means3D.shape[0], 1))
             dir_pp = dir_pp/dir_pp.norm(dim=1, keepdim=True)
             
             # triplane = pc.recolor.embeddings
-            triplane_lowres = pc.recolor.embeddings
-            triplane = pc.recolor_upsample(triplane_lowres)
+            # triplane_lowres = pc.recolor.embeddings
+            # triplane = pc.recolor_upsample(triplane_lowres)
             # shs = pc.mlp_head(torch.cat([triplane_sample(triplane, xyz), pc.direction_encoding(dir_pp)], dim=-1)).unsqueeze(1)
-            colors_precomp = pc.mlp_head(torch.cat([triplane_sample(triplane, xyz), pc.direction_encoding(dir_pp)], dim=-1)).unsqueeze(1)
+            # colors_precomp = pc.mlp_head(torch.cat([triplane_sample(triplane, xyz), pc.direction_encoding(dir_pp)], dim=-1))
             # shs = pc.mlp_head(torch.cat([pc.recolor(xyz), pc.direction_encoding(dir_pp)], dim=-1)).unsqueeze(1)
+            colors_precomp = pc.mlp_head(torch.cat([pc.recolor(xyz), pc.direction_encoding(dir_pp)], dim=-1))
         # Rasterize visible Gaussians to image, obtain their radii (on screen). 
     
     
@@ -118,7 +119,7 @@ def render(viewpoint_camera,
             means3D = means3D.float(),
             means2D = means2D,
             shs = shs,
-            colors_precomp = colors_precomp,
+            colors_precomp = colors_precomp.float(),
             opacities = opacity,
             scales = scales,
             rotations = rotations,
