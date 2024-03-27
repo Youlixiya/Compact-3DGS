@@ -26,10 +26,32 @@ from jaxtyping import Float, Int, Shaped
 from vector_quantize_pytorch import VectorQuantize, ResidualVQ
 import tinycudann as tcnn
 from scene.modules import Transformer, TriplaneTokens, triplane_sample
-
+from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianRasterizer
 from dahuffman import HuffmanCodec
 import math
 
+def camera2rasterizer(viewpoint_camera, bg_color: torch.Tensor, sh_degree: int = 0):
+    tanfovx = math.tan(viewpoint_camera.FoVx * 0.5)
+    tanfovy = math.tan(viewpoint_camera.FoVy * 0.5)
+
+    raster_settings = GaussianRasterizationSettings(
+        image_height=int(viewpoint_camera.image_height),
+        image_width=int(viewpoint_camera.image_width),
+        tanfovx=tanfovx,
+        tanfovy=tanfovy,
+        bg=bg_color,
+        scale_modifier=1.0,
+        viewmatrix=viewpoint_camera.world_view_transform,
+        projmatrix=viewpoint_camera.full_proj_transform,
+        sh_degree=sh_degree,
+        campos=viewpoint_camera.camera_center,
+        prefiltered=False,
+        debug=False,
+    )
+
+    rasterizer = GaussianRasterizer(raster_settings=raster_settings)
+
+    return rasterizer
 
 class TriplaneEncoding(nn.Module):
 
@@ -156,7 +178,7 @@ class GaussianModel:
         )
         self.color_head = tcnn.Network(
                 n_input_dims=(self.direction_encoding.n_output_dims+self.recolor.n_output_dims),
-                n_output_dims=32,
+                n_output_dims=3,
                 network_config={
                     "otype": "FullyFusedMLP",
                     "activation": "ReLU",
@@ -165,31 +187,6 @@ class GaussianModel:
                     "n_hidden_layers": 2,
                 },
             )
-        self.color_upsample = nn.Sequential(
-            # nn.ConvTranspose2d(
-            #     512, 256, kernel_size=2, stride=2
-            # ),
-            nn.ConvTranspose2d(
-                32, 16, kernel_size=2, stride=2
-            ),
-            nn.ConvTranspose2d(
-                16, 8, kernel_size=2, stride=2
-            ),
-            nn.ConvTranspose2d(
-                8, 3, kernel_size=2, stride=2
-            ),
-        ).cuda()
-        # self.latent_color_head = tcnn.Network(
-        #         n_input_dims=(self.direction_encoding.n_output_dims+self.recolor.n_output_dims),
-        #         n_output_dims=4,
-        #         network_config={
-        #             "otype": "FullyFusedMLP",
-        #             "activation": "ReLU",
-        #             "output_activation": "None",
-        #             "n_neurons": 64,
-        #             "n_hidden_layers": 2,
-        #         },
-        #     )
 
     def capture(self):
         return (
@@ -281,8 +278,6 @@ class GaussianModel:
         for params in self.recolor.parameters():
             other_params.append(params)
         for params in self.color_head.parameters():
-            other_params.append(params)
-        for params in self.color_upsample.parameters():
             other_params.append(params)
         # for params in self.latent_color_head.parameters():
         #     other_params.append(params)
@@ -624,6 +619,23 @@ class GaussianModel:
             x[mask] = (2 - 1 / mag[mask]) * (x[mask] / mag[mask])
             x = x / 4 + 0.5  # [-inf, inf] is at [0, 1]
             return x
+        
+    def apply_weights(self, camera, weights, weights_cnt, image_weights):
+        rasterizer = camera2rasterizer(
+            camera, torch.tensor([0.0, 0.0, 0.0], dtype=torch.float32, device="cuda")
+        )
+        rasterizer.apply_weights(
+            self.get_xyz,
+            None,
+            self.get_opacity,
+            None,
+            weights,
+            self.get_scaling,
+            self.get_rotation,
+            None,
+            weights_cnt,
+            image_weights,
+        )
 
 
 # class GaussianModel:

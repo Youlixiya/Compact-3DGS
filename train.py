@@ -10,10 +10,9 @@
 #
 
 import os
-import cv2
 import torch
 from random import randint
-from utils.loss_utils import l1_loss, ssim, l2_loss
+from utils.loss_utils import l1_loss, ssim
 from gaussian_renderer import render, network_gui
 import sys
 from scene import Scene, GaussianModel
@@ -23,9 +22,6 @@ from tqdm import tqdm
 from utils.image_utils import psnr
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
-from utils.extract_latent_images import LatentImageDataset, postprocess
-from scene.camera_scene import CamScene
-from diffusers.models import AutoencoderKL
 try:
     from torch.utils.tensorboard import SummaryWriter
     TENSORBOARD_FOUND = True
@@ -36,30 +32,14 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset)
-    vae = AutoencoderKL.from_pretrained(dataset.vae_model_path, subfolder='vae', torch_dtype=torch.float32
-                                        ).to('cuda')
-    vae.requires_grad_(False)
-    latent_images = dataset.images
-    images = dataset.images.replace('latents', 'images')
-    dataset.images = dataset.images.replace('latents', 'images')
-    # scene = Scene(dataset, gaussians)
-    img_name = os.listdir(os.path.join(dataset.source_path, images))[0]
-    h, w = cv2.imread(os.path.join(dataset.source_path, images, img_name)).shape[:2]
-    h = h // 8
-    w = w // 8
-    scene = CamScene(dataset, gaussians, h=h, w=w, eval=True)
-    scene.gaussians = gaussians
-    cameras = scene.getTrainCameras().copy() + scene.getTestCameras().copy()
-    latent_image_dataset = LatentImageDataset(dataset.source_path, cameras, vae, latent_dir=latent_images)
+    scene = Scene(dataset, gaussians)
     gaussians.training_setup(opt)
     if checkpoint:
         (model_params, first_iter) = torch.load(checkpoint)
         gaussians.restore(model_params, opt)
 
-    latent_bg_color = [1, 1, 1, 1] if dataset.white_background else [0, 0, 0, 0]
     bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
-    latent_background = torch.tensor(latent_bg_color, dtype=torch.float32, device="cuda")
 
     iter_start = torch.cuda.Event(enable_timing = True)
     iter_end = torch.cuda.Event(enable_timing = True)
@@ -69,42 +49,47 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
     for iteration in range(first_iter, opt.iterations + 1):        
+        if network_gui.conn == None:
+            network_gui.try_connect()
+        while network_gui.conn != None:
+            try:
+                net_image_bytes = None
+                custom_cam, do_training, pipe.convert_SHs_python, pipe.compute_cov3D_python, keep_alive, scaling_modifer = network_gui.receive()
+                if custom_cam != None:
+                    net_image = render(custom_cam, gaussians, pipe, background, scaling_modifer)["render"]
+                    net_image_bytes = memoryview((torch.clamp(net_image, min=0, max=1.0) * 255).byte().permute(1, 2, 0).contiguous().cpu().numpy())
+                network_gui.send(net_image_bytes, dataset.source_path)
+                if do_training and ((iteration < int(opt.iterations)) or not keep_alive):
+                    break
+            except Exception as e:
+                network_gui.conn = None
 
         iter_start.record()
 
         gaussians.update_learning_rate(iteration)
 
         # Every 1000 its we increase the levels of SH up to a maximum degree
-        # if iteration % 1000 == 0:
-        #     gaussians.oneupSHdegree()
+        if iteration % 1000 == 0:
+            gaussians.oneupSHdegree()
 
         # Pick a random Camera
         if not viewpoint_stack:
             viewpoint_stack = scene.getTrainCameras().copy()
-        index = randint(0, len(viewpoint_stack)-1)
-        viewpoint_cam = viewpoint_stack.pop(index)
+        viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
 
         # Render
         if (iteration - 1) == debug_from:
             pipe.debug = True
         if iteration <= opt.rvq_iter:
-            render_pkg = render(viewpoint_cam, gaussians, pipe, background, render_feature=False, itr=iteration, rvq_iter=False)
+            render_pkg = render(viewpoint_cam, gaussians, pipe, background, itr=iteration, rvq_iter=False)
         else:
-            render_pkg = render(viewpoint_cam, gaussians, pipe, background, render_feature=False, itr=iteration, rvq_iter=True)
-        # latent_image = render(viewpoint_cam, gaussians, pipe, latent_background, render_feature=True, itr=iteration, rvq_iter=False)['render_feature']
+            render_pkg = render(viewpoint_cam, gaussians, pipe, background, itr=iteration, rvq_iter=True)
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
+
         # Loss
-        # gt_image = viewpoint_cam.original_image.cuda()
-        # gt_image = torch.nn.functional.interpolate(latent_image_dataset[index][None], size=(h, w), mode='bilinear')[0]
-        image = gaussians.color_upsample(image[None])[0]
-        gt_image = latent_image_dataset.imgs_dict[viewpoint_cam.image_name].to('cuda')
-        # gt_latent_image = latent_image_dataset.latent_images_dict[viewpoint_cam.image_name]
-        # print(image.shape)
-        # print(gt_image.shape)
+        gt_image = viewpoint_cam.original_image.cuda()
         Ll1 = l1_loss(image, gt_image)
-        # Ll1 = torch.nn.functional.mse_loss(image, gt_image)
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image)) + render_pkg["vqloss"] + opt.lambda_mask*torch.mean((torch.sigmoid(gaussians._mask)))
-        # loss = Ll1 + render_pkg["vqloss"] + opt.lambda_mask*torch.mean((torch.sigmoid(gaussians._mask)))
         loss.backward()
 
         iter_end.record()
@@ -113,7 +98,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             # Progress bar
             ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
             if iteration % 10 == 0:
-                progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{7}f}", "N_GS": gaussians._xyz.shape[0]})
+                progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{7}f}"})
                 progress_bar.update(10)
             if iteration == opt.iterations:
                 progress_bar.close()
@@ -125,7 +110,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 gaussians.precompute()
                 
             # Log and save
-            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, gaussians, latent_image_dataset, render, (pipe, background, False))
+            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background))
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
@@ -179,7 +164,7 @@ def prepare_output_and_logger(args):
         print("Tensorboard not available: not logging progress")
     return tb_writer
 
-def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene : Scene, gaussians, latent_image_dataset, renderFunc, renderArgs):
+def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs):
     if tb_writer:
         tb_writer.add_scalar('train_loss_patches/l1_loss', Ll1.item(), iteration)
         tb_writer.add_scalar('train_loss_patches/total_loss', loss.item(), iteration)
@@ -196,11 +181,8 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                 l1_test = 0.0
                 psnr_test = 0.0
                 for idx, viewpoint in enumerate(config['cameras']):
-                    # latent_image = renderFunc(viewpoint, scene.gaussians, *renderArgs)["render_feature"][None]
-                    # image = torch.clamp((vae.decode(latent_image, return_dict=False)[0] + 1) / 2, 0.0, 1.0)
-                    image = torch.clamp(gaussians.color_upsample(renderFunc(viewpoint, scene.gaussians, *renderArgs)["render"][None])[0], 0.0, 1.0)
-                    gt_image = latent_image_dataset.imgs_dict[viewpoint.image_name].to('cuda')
-                    gt_image = torch.clamp(gt_image, 0.0, 1.0)
+                    image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs)["render"], 0.0, 1.0)
+                    gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
                     if tb_writer and (idx < 5):
                         tb_writer.add_images(config['name'] + "_view_{}/render".format(viewpoint.image_name), image[None], global_step=iteration)
                         if iteration == testing_iterations[0]:
@@ -225,8 +207,8 @@ if __name__ == "__main__":
     lp = ModelParams(parser)
     op = OptimizationParams(parser)
     pp = PipelineParams(parser)
-    # parser.add_argument('--ip', type=str, default="127.0.0.1")
-    # parser.add_argument('--port', type=int, default=6009)
+    parser.add_argument('--ip', type=str, default="127.0.0.1")
+    parser.add_argument('--port', type=int, default=6009)
     parser.add_argument('--debug_from', type=int, default=-1)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
     parser.add_argument("--test_iterations", nargs="+", type=int, default=[30_000])
@@ -245,7 +227,7 @@ if __name__ == "__main__":
     safe_state(args.quiet)
     
     # Start GUI server, configure and run training
-    # network_gui.init(args.ip, args.port)
+    network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
     
     training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, args.comp)

@@ -16,6 +16,7 @@ from scene.gaussian_model import GaussianModel, LatentGaussianModel
 from utils.sh_utils import eval_sh
 from scene.modules import triplane_sample
 
+
 def render(viewpoint_camera,
            pc : GaussianModel,
            pipe,
@@ -42,13 +43,13 @@ def render(viewpoint_camera,
     tanfovx = math.tan(viewpoint_camera.FoVx * 0.5)
     tanfovy = math.tan(viewpoint_camera.FoVy * 0.5)
 
-    # if render_feature:
+    if render_feature:
         # bg_color = torch.tensor(
         #     [0] * override_feature.shape[-1], dtype=torch.float32, device="cuda"
         # )
-    Rasterizer = GaussianFeatureRasterizer
-    # else:
-    #     Rasterizer = GaussianRasterizer
+        Rasterizer = GaussianFeatureRasterizer
+    else:
+        Rasterizer = GaussianRasterizer
     
     raster_settings = GaussianRasterizationSettings(
         image_height=int(viewpoint_camera.image_height),
@@ -83,8 +84,8 @@ def render(viewpoint_camera,
             dir_pp = dir_pp/dir_pp.norm(dim=1, keepdim=True)
             # xyz = pc.contract_to_unisphere(means3D.clone().detach(), torch.tensor([-1.0, -1.0, -1.0, 1.0, 1.0, 1.0], device='cuda'))
             # colors_precomp = pc.mlp_head(torch.cat([pc.recolor(xyz), pc.direction_encoding(dir_pp)], dim=-1))
-            # shs = pc.color_head(torch.cat([pc._feature, pc.direction_encoding(dir_pp)], dim=-1)).unsqueeze(1)
-            colors_precomp = pc.color_head(torch.cat([pc._feature, pc.direction_encoding(dir_pp)], dim=-1)).unsqueeze(1)
+            shs = pc.color_head(torch.cat([pc._feature, pc.direction_encoding(dir_pp)], dim=-1)).unsqueeze(1)
+            # colors_precomp = pc.color_head(torch.cat([pc._feature, pc.direction_encoding(dir_pp)], dim=-1)).unsqueeze(1)
             
         else:
             mask = ((torch.sigmoid(pc._mask) > 0.01).float()- torch.sigmoid(pc._mask)).detach() + torch.sigmoid(pc._mask)
@@ -112,16 +113,16 @@ def render(viewpoint_camera,
             # triplane = pc.recolor_upsample(triplane_lowres)
             # shs = pc.mlp_head(torch.cat([triplane_sample(triplane, xyz), pc.direction_encoding(dir_pp)], dim=-1)).unsqueeze(1)
             # colors_precomp = pc.mlp_head(torch.cat([triplane_sample(triplane, xyz), pc.direction_encoding(dir_pp)], dim=-1))
-            # shs = pc.color_head(torch.cat([pc.recolor(xyz), pc.direction_encoding(dir_pp)], dim=-1)).unsqueeze(1)
-            colors_precomp = pc.color_head(torch.cat([pc.recolor(xyz), pc.direction_encoding(dir_pp)], dim=-1))
+            shs = pc.color_head(torch.cat([pc.recolor(xyz), pc.direction_encoding(dir_pp)], dim=-1)).unsqueeze(1)
+            # colors_precomp = pc.color_head(torch.cat([pc.recolor(xyz), pc.direction_encoding(dir_pp)], dim=-1))
         # Rasterize visible Gaussians to image, obtain their radii (on screen). 
     
     
         rendered_image, radii, depth = rasterizer(
             means3D = means3D.float(),
             means2D = means2D,
-            shs = None,
-            colors_precomp = colors_precomp.float(),
+            shs = shs.float(),
+            colors_precomp = None,
             opacities = opacity,
             scales = scales,
             rotations = rotations,

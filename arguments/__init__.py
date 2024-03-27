@@ -53,6 +53,8 @@ class ModelParams(ParamGroup):
         self._resolution = -1
         self._white_background = False
         self.vae_model_path = 'ckpts/instruct-pix2pix'
+        self.sam_model_type = "vit_h"
+        self.sam_model_ckpt = "ckpts/sam_vit_h_4b8939.pth"
         self.data_device = "cuda"
         self.eval = False
         self.max_hashmap = 19
