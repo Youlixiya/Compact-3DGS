@@ -52,7 +52,7 @@ class ModelParams(ParamGroup):
         self._images = "images"
         self._resolution = -1
         self._white_background = False
-        self.vae_model_path = 'timbrooks/instruct-pix2pix'
+        self.vae_model_path = 'ckpts/instruct-pix2pix'
         self.data_device = "cuda"
         self.eval = False
         self.max_hashmap = 19
@@ -75,6 +75,7 @@ class PipelineParams(ParamGroup):
 class OptimizationParams(ParamGroup):
     def __init__(self, parser):
         self.iterations = 30_000
+        self.latent_iterations = 30_000
         self.mask_iterations = 2_000
         self.position_lr_init = 0.00016
         self.position_lr_final = 0.0000016
@@ -83,8 +84,8 @@ class OptimizationParams(ParamGroup):
         self.feature_lr = 0.0025
         self.instance_embeddings_lr = 0.01
         # self.triplane_encoder_lr = 0.01
-        self.triplane_tokens_lr = 0.01
-        self.triplane_upsample_lr = 0.01
+        self.latent_recolor_lr = 0.01
+        self.latent_color_head_lr = 0.01
         self.transformer_lr = 0.01
         self.mask_mlp_lr = 0.001
         self.opacity_lr = 0.05

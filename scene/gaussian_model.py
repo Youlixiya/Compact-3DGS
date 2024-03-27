@@ -154,9 +154,9 @@ class GaussianModel:
                 "degree": 3 
             },
         )
-        self.mlp_head = tcnn.Network(
+        self.color_head = tcnn.Network(
                 n_input_dims=(self.direction_encoding.n_output_dims+self.recolor.n_output_dims),
-                n_output_dims=4,
+                n_output_dims=32,
                 network_config={
                     "otype": "FullyFusedMLP",
                     "activation": "ReLU",
@@ -165,6 +165,31 @@ class GaussianModel:
                     "n_hidden_layers": 2,
                 },
             )
+        self.color_upsample = nn.Sequential(
+            # nn.ConvTranspose2d(
+            #     512, 256, kernel_size=2, stride=2
+            # ),
+            nn.ConvTranspose2d(
+                32, 16, kernel_size=2, stride=2
+            ),
+            nn.ConvTranspose2d(
+                16, 8, kernel_size=2, stride=2
+            ),
+            nn.ConvTranspose2d(
+                8, 3, kernel_size=2, stride=2
+            ),
+        ).cuda()
+        # self.latent_color_head = tcnn.Network(
+        #         n_input_dims=(self.direction_encoding.n_output_dims+self.recolor.n_output_dims),
+        #         n_output_dims=4,
+        #         network_config={
+        #             "otype": "FullyFusedMLP",
+        #             "activation": "ReLU",
+        #             "output_activation": "None",
+        #             "n_neurons": 64,
+        #             "n_hidden_layers": 2,
+        #         },
+        #     )
 
     def capture(self):
         return (
@@ -255,8 +280,12 @@ class GaussianModel:
             other_params.append(params)
         for params in self.recolor.parameters():
             other_params.append(params)
-        for params in self.mlp_head.parameters():
+        for params in self.color_head.parameters():
             other_params.append(params)
+        for params in self.color_upsample.parameters():
+            other_params.append(params)
+        # for params in self.latent_color_head.parameters():
+        #     other_params.append(params)
             
         l = [
             {'params': [self._xyz], 'lr': training_args.position_lr_init * self.spatial_lr_scale, "name": "xyz"},
@@ -538,7 +567,8 @@ class GaussianModel:
         rotation_mb = self._xyz.shape[0]*self.rvq_bit*self.rvq_num/8/10**6 + 2**self.rvq_bit*self.rvq_num*4*32/8/10**6
         opacity_mb = self._xyz.shape[0]*16/8/10**6
         hash_mb = self.recolor.params.shape[0]*16/8/10**6
-        mlp_mb = self.mlp_head.params.shape[0]*16/8/10**6
+        # mlp_mb = (self.color_head.params.shape[0] + self.latent_color_head.params.shape[0])*16/8/10**6
+        mlp_mb = self.color_head.params.shape[0]*16/8/10**6
         sum_mb = position_mb+scale_mb+rotation_mb+opacity_mb+hash_mb+mlp_mb
         
         mb_str = "Storage\nposition: "+str(position_mb)+"\nscale: "+str(scale_mb)+"\nrotation: "+str(rotation_mb)+"\nopacity: "+str(opacity_mb)+"\nhash: "+str(hash_mb)+"\nmlp: "+str(mlp_mb)+"\ntotal: "+str(sum_mb)+" MB"
@@ -551,7 +581,8 @@ class GaussianModel:
             rotation_mb = self.huffman_encode(rot_idx) + 2**self.rvq_bit*self.rvq_num*4*32/8/10**6
             opacity_mb = self.huffman_encode(quant_opa)
             hash_mb = self.huffman_encode(quant_hash)
-            mlp_mb = self.mlp_head.params.shape[0]*16/8/10**6
+            # mlp_mb = (self.color_head.params.shape[0] + self.latent_color_head.params.shape[0])*16/8/10**6
+            mlp_mb = self.color_head.params.shape[0]*16/8/10**6
             sum_mb = position_mb+scale_mb+rotation_mb+opacity_mb+hash_mb+mlp_mb
             
             mb_str = mb_str+"\n\nAfter PP\nposition: "+str(position_mb)+"\nscale: "+str(scale_mb)+"\nrotation: "+str(rotation_mb)+"\nopacity: "+str(opacity_mb)+"\nhash: "+str(hash_mb)+"\nmlp: "+str(mlp_mb)+"\ntotal: "+str(sum_mb)+" MB"
@@ -640,21 +671,21 @@ class GaussianModel:
         
 #         self.recolor = TriplaneTokens(resolution=32, num_components=256).cuda()
 #         # self.recolor = TriplaneTokens(resolution=128, num_components=64).cuda()
-#         self.recolor_upsample = nn.Sequential(
-#             # nn.ConvTranspose2d(
-#             #     512, 256, kernel_size=2, stride=2
-#             # ),
-#             nn.ConvTranspose2d(
-#                 256, 128, kernel_size=2, stride=2
-#             ),
-#             nn.SiLU(inplace=True),
-#             nn.ConvTranspose2d(
-#                 128, 64, kernel_size=2, stride=2
-#             ),
-#             # nn.ConvTranspose2d(
-#             #     64, 32, kernel_size=2, stride=2
-#             # ),
-#         ).cuda()
+        # self.recolor_upsample = nn.Sequential(
+        #     # nn.ConvTranspose2d(
+        #     #     512, 256, kernel_size=2, stride=2
+        #     # ),
+        #     nn.ConvTranspose2d(
+        #         256, 128, kernel_size=2, stride=2
+        #     ),
+        #     nn.SiLU(inplace=True),
+        #     nn.ConvTranspose2d(
+        #         128, 64, kernel_size=2, stride=2
+        #     ),
+        #     # nn.ConvTranspose2d(
+        #     #     64, 32, kernel_size=2, stride=2
+        #     # ),
+        # ).cuda()
 
 #         self.direction_encoding = tcnn.Encoding(
 #             n_input_dims=3,
@@ -1230,7 +1261,7 @@ class GaussianModel:
 #         self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
         
 
-class TriplaneGaussianModel(GaussianModel):
+class LatentGaussianModel(GaussianModel):
     use_triplane = True
     def __init__(self,
                  model,
@@ -1240,112 +1271,50 @@ class TriplaneGaussianModel(GaussianModel):
         super().__init__(model, rvq)
         self.hidden_dim = hidden_dim
         self.device = device
-        
-    def set_triplane_tokens(self, instance_num):
-        self.triplane_tokens = nn.ModuleList(
-            [
-                TriplaneTokens(resolution=32,
-                               num_components=16)
-                for _ in range(instance_num)
-            ]
-        ).to(self.device)
-        self.triplane_upsample = nn.Sequential(
-            nn.ConvTranspose2d(
-                16, 8, kernel_size=2, stride=2
-            ),
-            nn.ConvTranspose2d(
-                8, 4, kernel_size=2, stride=2
-            ),
-            nn.ConvTranspose2d(
-                4, 2, kernel_size=2, stride=2
-            ),
-            nn.ConvTranspose2d(
-                2, 1, kernel_size=2, stride=2
-            ),
-        ).to(self.device)
+        self.latent_recolor = tcnn.Encoding(
+                 n_input_dims=3,
+                 encoding_config={
+                    "otype": "HashGrid",
+                    "n_levels": 16,
+                    "n_features_per_level": 2,
+                    "log2_hashmap_size": model.max_hashmap,
+                    "base_resolution": 16,
+                    "per_level_scale": 1.447,
+                },
+        )
+        self.latent_color_head = tcnn.Network(
+                n_input_dims=(self.direction_encoding.n_output_dims+self.latent_recolor.n_output_dims),
+                n_output_dims=4,
+                network_config={
+                    "otype": "FullyFusedMLP",
+                    "activation": "ReLU",
+                    "output_activation": "None",
+                    "n_neurons": 64,
+                    "n_hidden_layers": 2,
+                },
+            )
     
-    def set_instance_embeddings(self, instance_num):
-        self.instance_num = instance_num
-        self.instance_embeddings = torch.randn((instance_num, self.hidden_dim), dtype=torch.float, device=self.device).requires_grad_(True)
-    
-    def set_clip_embeddings(self, clip_embeddings):
-        self.clip_embeddings = clip_embeddings
-    
-    def set_instance_colors(self, instance_colors):
-        self.instance_colors = instance_colors
-    
-    def load_ply(self, path):
-        plydata = PlyData.read(path)
-
-        xyz = np.stack((np.asarray(plydata.elements[0]["x"]),
-                        np.asarray(plydata.elements[0]["y"]),
-                        np.asarray(plydata.elements[0]["z"])),  axis=1)
-        opacities = np.asarray(plydata.elements[0]["opacity"])[..., np.newaxis]
-
-        scale_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("scale_")]
-        scale_names = sorted(scale_names, key = lambda x: int(x.split('_')[-1]))
-        scales = np.zeros((xyz.shape[0], len(scale_names)))
-        for idx, attr_name in enumerate(scale_names):
-            scales[:, idx] = np.asarray(plydata.elements[0][attr_name])
-
-        rot_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("rot")]
-        rot_names = sorted(rot_names, key = lambda x: int(x.split('_')[-1]))
-        rots = np.zeros((xyz.shape[0], len(rot_names)))
-        for idx, attr_name in enumerate(rot_names):
-            rots[:, idx] = np.asarray(plydata.elements[0][attr_name])
-
-        self._xyz = nn.Parameter(torch.tensor(xyz, dtype=torch.float, device="cuda").requires_grad_(True))
-        self._opacity = nn.Parameter(torch.tensor(opacities, dtype=torch.float, device="cuda").requires_grad_(True))
-        self._scaling = nn.Parameter(torch.tensor(scales, dtype=torch.float, device="cuda").requires_grad_(True))
-        self._rotation = nn.Parameter(torch.tensor(rots, dtype=torch.float, device="cuda").requires_grad_(True))
-
-        self.active_sh_degree = self.max_sh_degree
-    
-    def save_feature_params(self, path, iter, extra=''):
+    def save_params(self, path, iter, extra=''):
         mkdir_p(os.path.dirname(path))
-        # feature_aggregator_ckpt = self.feature_aggregator.state_dict() if self.feature_aggregator else None
         state = {
-            'instance_embeddings': self.instance_embeddings.detach().cpu().numpy(),
-            # 'triplane_encoder': self.triplane_encoder.state_dict(),
-            'triplane_tokens': self.triplane_tokens.state_dict(),
-            'triplane_upsample': self.triplane_upsample.state_dict(),
-            # 'transformer': self.transformer.state_dict(),
-            # 'mask_mlp': self.mask_mlp.state_dict(),
-            # 'instance_feature_decoder': self.instance_feature_decoder.state_dict(),
-            'clip_embeddings': self.clip_embeddings,
-            'instance_colors': self.instance_colors.cpu(),
-            'instance_num': self.instance_num,
+            'latent_recolor': self.latent_recolor.state_dict(),
+            'latent_color_head': self.latent_color_head.state_dict(),
         }
-        # # rgb_decode = 'rgb_' if self.rgb_decode else ''
-        # depth_decode = 'depth_' if self.depth_decode else ''
-        save_path = os.path.join(path, f'{extra}_triplane_{iter}.pt')
+        save_path = os.path.join(path, f'latent_{iter}.pt')
         torch.save(state, save_path)
     
-    def load_feature_params(self, params_path):
+    def load_params(self, params_path):
         state = torch.load(params_path)
-        self.instance_embeddings = nn.Parameter(torch.tensor(state['instance_embeddings'], dtype=torch.float, device=self.device).requires_grad_(False))
-        self.instance_embeddings = F.normalize(self.instance_embeddings, dim=-1)
-        self.instance_colors = state['instance_colors']
-        self.instance_num = state['instance_num']
-        self.clip_embeddings = state['clip_embeddings']
-        self.set_triplane_tokens(self.instance_num)
-        # self.triplane_encoder.load_state_dict(state['triplane_encoder'])
-        self.triplane_tokens.load_state_dict(state['triplane_tokens'])
-        self.triplane_upsample.load_state_dict(state['triplane_upsample'])
-        # self.transformer.load_state_dict(state['transformer'])
-        # self.mask_mlp.load_state_dict(state['mask_mlp'])
-        # self.instance_feature_decoder.load_state_dict(state['instance_feature_decoder'])
+        self.latent_recolor.load_state_dict(state['latent_recolor'])
+        self.latent_color_head.load_state_dict(state['latent_color_head'])
         
     
-    def feature_training_setup(self, training_args):
+    def latent_training_setup(self, training_args):
         l = [
-            # {'params': self.triplane_encoder.parameters(), 'lr': training_args.triplane_encoder_lr, "name": "triplane_encoder"},
-            {'params': self.triplane_tokens.parameters(), 'lr': training_args.triplane_tokens_lr, "name": "triplane_tokens"},
-            {'params': self.triplane_upsample.parameters(), 'lr': training_args.triplane_upsample_lr, "name": "triplane_upsample"},
-            # {'params': self.transformer.parameters(), 'lr': training_args.transformer_lr, "name": "transformer"},
-            # {'params': self.mask_mlp.parameters(), 'lr': training_args.mask_mlp_lr, "name": "mask_mlp"},
-            {'params': [self.instance_embeddings], 'lr': training_args.instance_embeddings_lr, "name": "instance_embeddings"},
-            # {'params': self.instance_feature_decoder.parameters(), 'lr': training_args.instance_feature_decoder_lr, "name": "instance_feature_decoder"},
+           
+            {'params': self.latent_recolor.parameters(), 'lr': training_args.latent_recolor_lr, "name": "latent_recolor"},
+            {'params': self.latent_color_head.parameters(), 'lr': training_args.latent_color_head_lr, "name": "latent_color_head"},
+           
         ]
 
         self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)

@@ -36,15 +36,28 @@ class LatentImageDataset(Dataset):
         img_suffix = os.listdir(os.path.join(source_root, self.img_dir))[0].split('.')[-1]
         self.imgs_name = [f'{camera.image_name}.{img_suffix}' for camera in cameras]
         self.latents_path = os.path.join(source_root, f'{latent_dir}.pt')
+        self.imgs_path = [os.path.join(source_root, self.img_dir, img_name) for img_name in self.imgs_name]
+        imgs = [Image.open(img_path) for img_path in self.imgs_path]
+        w, h = imgs[0].size
+        low_w = w // 8
+        low_h = h // 8
+        w = low_w * 8
+        h = low_h * 8
+        self.trans_low = T.Compose(
+            [T.Resize((low_h, low_w)),
+            T.ToTensor()]
+        )
+        self.trans = T.Compose(
+            [T.Resize((h, w)),
+            T.ToTensor()]
+        )
         if os.path.exists(self.latent_dir):
-            self.latent_images = torch.load(self.latents_path)
-        else:
-            self.imgs_path = [os.path.join(source_root, self.img_dir, img_name) for img_name in self.imgs_name]
-            self.imgs = [Image.open(img_path) for img_path in self.imgs_path]
+            self.latent_images_dict = torch.load(self.latents_path)
+        else: 
             # self.imgs = np.stack([cv2.cvtColor(cv2.imread(img_path), cv2.COLOR_BGR2RGB) for img_path in self.imgs_path], axis=0)
             self.device = device           
             self.latent_images = []
-            for img in self.imgs:
+            for img in imgs:
                 w, h = img.size
                 w = (w // 8) * 8
                 h = (h // 8) * 8
@@ -52,10 +65,21 @@ class LatentImageDataset(Dataset):
                 encode_out = vae.encode(image_pt.to(device=vae.device, dtype=vae.dtype))
                 latent_image = encode_out.latent_dist.mode()
                 self.latent_images.append(latent_image)
-            self.latent_images = torch.cat(self.latent_images)
-            torch.save(self.latent_images, self.latents_path)
+            self.latent_images_dict = {}
+            for i in range(len(self.latent_images)):
+                self.latent_images_dict[cameras[i].image_name] = self.latent_images[i]
+            # self.latent_images = torch.cat(self.latent_images)
+            torch.save(self.latent_images_dict, self.latents_path)
             
         torch.cuda.empty_cache()
+        self.imgs = torch.stack([self.trans(img) for img in imgs])
+        self.imgs_low = torch.stack([self.trans_low(img) for img in imgs])
+        self.imgs_dict = {}
+        self.imgs_low_dict = {}
+        for i in range(len(self.imgs)):
+            self.imgs_dict[cameras[i].image_name] = self.imgs[i]
+            self.imgs_low_dict[cameras[i].image_name] = self.imgs_low[i]
+        # print(self.imgs_dict)
     
     def __len__(self):
         return len(self.latent_images)

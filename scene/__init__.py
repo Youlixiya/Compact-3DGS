@@ -15,7 +15,7 @@ import json
 import torch
 from utils.system_utils import searchForMaxIteration
 from scene.dataset_readers import sceneLoadTypeCallbacks
-from scene.gaussian_model import GaussianModel, TriplaneGaussianModel
+from scene.gaussian_model import GaussianModel, LatentGaussianModel
 from arguments import ModelParams
 from utils.camera_utils import cameraList_from_camInfos, camera_to_JSON
 
@@ -81,14 +81,14 @@ class Scene:
                                                            "point_cloud",
                                                            "iteration_" + str(self.loaded_iter),
                                                            "point_cloud.ply"))
-            torch.nn.ModuleList([self.gaussians.recolor, self.gaussians.recolor_upsample, self.gaussians.mlp_head]).load_state_dict(torch.load(os.path.join(self.model_path,
+            # torch.nn.ModuleList([self.gaussians.recolor, self.gaussians.recolor_upsample, self.gaussians.mlp_head]).load_state_dict(torch.load(os.path.join(self.model_path,
+                                                        #    "point_cloud",
+                                                        #    "iteration_" + str(self.loaded_iter),
+                                                        #    "point_cloud.pth")))
+            torch.nn.ModuleList([self.gaussians.recolor, self.gaussians.mlp_head]).load_state_dict(torch.load(os.path.join(self.model_path,
                                                            "point_cloud",
                                                            "iteration_" + str(self.loaded_iter),
                                                            "point_cloud.pth")))
-            # torch.nn.ModuleList([self.gaussians.recolor, self.gaussians.mlp_head]).load_state_dict(torch.load(os.path.join(self.model_path,
-            #                                                "point_cloud",
-            #                                                "iteration_" + str(self.loaded_iter),
-            #                                                "point_cloud.pth")))
         else:
             self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent)
 
@@ -96,8 +96,8 @@ class Scene:
         point_cloud_path = os.path.join(self.model_path, "point_cloud/iteration_{}".format(iteration))
         self.gaussians.save_ply(os.path.join(point_cloud_path, "point_cloud.ply"))
         
-        # torch.save(torch.nn.ModuleList([self.gaussians.recolor, self.gaussians.mlp_head]).state_dict(), os.path.join(point_cloud_path, "point_cloud.pth"))
-        torch.save(torch.nn.ModuleList([self.gaussians.recolor, self.gaussians.recolor_upsample, self.gaussians.mlp_head]).state_dict(), os.path.join(point_cloud_path, "point_cloud.pth"))
+        torch.save(torch.nn.ModuleList([self.gaussians.recolor, self.gaussians.mlp_head]).state_dict(), os.path.join(point_cloud_path, "point_cloud.pth"))
+        # torch.save(torch.nn.ModuleList([self.gaussians.recolor, self.gaussians.recolor_upsample, self.gaussians.mlp_head]).state_dict(), os.path.join(point_cloud_path, "point_cloud.pth"))
 
     def getTrainCameras(self, scale=1.0):
         return self.train_cameras[scale]
